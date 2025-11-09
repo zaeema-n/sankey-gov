@@ -2,17 +2,11 @@ import { useEffect, useState } from "react";
 import SankeyChart from "./components/SankeyChart";
 
 const BASE_URL = "http://localhost:8000/data/orgchart/sankey";
+const PRESIDENT_ENDPOINT = "http://localhost:8000/data/orgchart/president";
 
 const SELECTED_PRESIDENT_ID = "2149-34_cit_1";
 
-const REQUEST_DATES = [
-  "2022-04-05",
-  "2022-05-05",
-  "2022-06-05",
-  "2022-07-05",
-];
-
-const LAYER_WIDTH = 190;
+const LAYER_WIDTH = 200;
 
 const getInitialViewportSize = () => {
   if (typeof window === "undefined") {
@@ -27,7 +21,6 @@ const estimateSankeyHeight = (data, fallbackHeight) => {
     return fallbackHeight;
   }
 
-  // Estimate height based on node count. Adjust multiplier as needed to provide spacing.
   const estimatedHeight = data.nodes.length * 30;
 
   return Math.max(fallbackHeight, estimatedHeight);
@@ -38,7 +31,6 @@ const estimateSankeyWidth = (data, fallbackWidth) => {
     return fallbackWidth;
   }
 
-  // Estimate width based on number of distinct columns/layers inferred from node x-positions if available
   const uniqueLayers = new Set();
   data.nodes.forEach((node) => {
     if (typeof node.layer === "number") {
@@ -50,10 +42,43 @@ const estimateSankeyWidth = (data, fallbackWidth) => {
 
   const layersCount = uniqueLayers.size || Math.ceil(Math.sqrt(data.nodes.length));
 
-  // Rough width estimation based on desired layer width
   const estimatedWidth = layersCount * LAYER_WIDTH;
 
   return Math.max(fallbackWidth, estimatedWidth);
+};
+
+const getSampledDates = (startISO, endISO, sampleCount = 10) => {
+  if (!startISO || !endISO || sampleCount <= 0) {
+    return [];
+  }
+
+  const startDate = new Date(startISO);
+  const endDate = new Date(endISO);
+
+  if (
+    Number.isNaN(startDate.getTime()) ||
+    Number.isNaN(endDate.getTime()) ||
+    endDate.getTime() <= startDate.getTime()
+  ) {
+    return [];
+  }
+
+  if (sampleCount === 1) {
+    return [startDate.toISOString().slice(0, 10)];
+  }
+
+  const results = [];
+  const startTime = startDate.getTime();
+  const endTime = endDate.getTime();
+  const step = (endTime - startTime) / (sampleCount - 1);
+
+  for (let index = 0; index < sampleCount; index += 1) {
+    const sampleTime = startTime + step * index;
+    const date = new Date(sampleTime);
+    results.push(date.toISOString().slice(0, 10));
+  }
+
+  return Array.from(new Set(results));
 };
 
 function App() {
@@ -84,20 +109,51 @@ function App() {
         setLoading(true);
         setError(null);
 
-        const url = `${BASE_URL}/${SELECTED_PRESIDENT_ID}`;
+        const tenureResponse = await fetch(
+          `${PRESIDENT_ENDPOINT}/${SELECTED_PRESIDENT_ID}`,
+          {
+            method: "GET",
+            signal: controller.signal,
+          }
+        );
 
-        const response = await fetch(url, {
+        if (!tenureResponse.ok) {
+          throw new Error(
+            `President tenure API error: ${tenureResponse.status} ${tenureResponse.statusText}`
+          );
+        }
+
+        const tenure = await tenureResponse.json();
+        const presidencyRecord = tenure?.[0];
+
+        if (!presidencyRecord?.startTime || !presidencyRecord?.endTime) {
+          throw new Error("Missing start/end time for president tenure");
+        }
+
+        const requestDates = getSampledDates(
+          presidencyRecord.startTime,
+          presidencyRecord.endTime,
+          10
+        );
+
+        if (requestDates.length === 0) {
+          throw new Error("No valid dates generated for Sankey request");
+        }
+
+        const sankeyUrl = `${BASE_URL}/${SELECTED_PRESIDENT_ID}`;
+
+        const response = await fetch(sankeyUrl, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify(REQUEST_DATES),
+          body: JSON.stringify(requestDates),
           signal: controller.signal,
         });
 
         if (!response.ok) {
           throw new Error(
-            `API error: ${response.status} ${response.statusText}`
+            `Sankey API error: ${response.status} ${response.statusText}`
           );
         }
 
@@ -106,7 +162,7 @@ function App() {
       } catch (err) {
         if (err.name === "AbortError") return;
 
-        console.error("Failed to fetch Sankey data:", err);
+        console.error("Failed to set up Sankey data:", err);
         setError(err);
         setData(null);
       } finally {
@@ -119,11 +175,9 @@ function App() {
     return () => controller.abort();
   }, []);
 
-  const baseAvailableHeight = Math.max(viewportSize.height - 200, 400);
-  const chartHeight = estimateSankeyHeight(data, baseAvailableHeight);
+  const baseHeight = Math.max(viewportSize.height - 200, 400);
+  const chartHeight = estimateSankeyHeight(data, baseHeight);
   const chartWidth = estimateSankeyWidth(data, viewportSize.width);
-  const visibleWidth = Math.min(viewportSize.width, LAYER_WIDTH * 2);
-  const maxVisibleHeight = Math.max(baseAvailableHeight, Math.min(chartHeight, viewportSize.height - 140));
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50">
@@ -133,7 +187,7 @@ function App() {
         </h2>
       </header>
 
-      <main className="flex-1 relative">
+      <main className="flex-1 overflow-auto relative">
         {loading && (
           <div className="absolute inset-0 flex items-center justify-center text-slate-500">
             Loading Sankey data…
@@ -147,21 +201,12 @@ function App() {
         )}
 
         {!loading && !error && data && (
-          <div className="h-full w-full flex justify-center px-6 py-6">
+          <div className="px-6 py-6 min-w-fit">
             <div
-              className="overflow-auto rounded border border-slate-200 shadow bg-white"
-              style={{ width: visibleWidth, maxHeight: maxVisibleHeight }}
+              className="inline-block rounded border border-slate-200 shadow bg-white"
+              style={{ width: chartWidth, minHeight: chartHeight }}
             >
-              <div
-                className="relative"
-                style={{ width: chartWidth, minHeight: chartHeight }}
-              >
-                <SankeyChart
-                  data={data}
-                  width={chartWidth}
-                  height={chartHeight}
-                />
-              </div>
+              <SankeyChart data={data} width={chartWidth} height={chartHeight} />
             </div>
           </div>
         )}

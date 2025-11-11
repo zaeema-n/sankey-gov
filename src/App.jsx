@@ -2,9 +2,14 @@ import { useEffect, useState } from "react";
 import SankeyChart from "./components/SankeyChart";
 
 const BASE_URL = "http://localhost:8000/data/orgchart/sankey";
-const PRESIDENT_ENDPOINT = "http://localhost:8000/data/orgchart/president";
 
 const SELECTED_PRESIDENT_ID = "2149-34_cit_1";
+
+const REQUEST_DATES = [
+  "2020-04-08",
+  "2020-08-09",
+  "2020-11-20"
+];
 
 const LAYER_WIDTH = 200;
 
@@ -47,40 +52,6 @@ const estimateSankeyWidth = (data, fallbackWidth) => {
   return Math.max(fallbackWidth, estimatedWidth);
 };
 
-const getSampledDates = (startISO, endISO, sampleCount = 10) => {
-  if (!startISO || !endISO || sampleCount <= 0) {
-    return [];
-  }
-
-  const startDate = new Date(startISO);
-  const endDate = new Date(endISO);
-
-  if (
-    Number.isNaN(startDate.getTime()) ||
-    Number.isNaN(endDate.getTime()) ||
-    endDate.getTime() <= startDate.getTime()
-  ) {
-    return [];
-  }
-
-  if (sampleCount === 1) {
-    return [startDate.toISOString().slice(0, 10)];
-  }
-
-  const results = [];
-  const startTime = startDate.getTime();
-  const endTime = endDate.getTime();
-  const step = (endTime - startTime) / (sampleCount - 1);
-
-  for (let index = 0; index < sampleCount; index += 1) {
-    const sampleTime = startTime + step * index;
-    const date = new Date(sampleTime);
-    results.push(date.toISOString().slice(0, 10));
-  }
-
-  return Array.from(new Set(results));
-};
-
 function App() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -109,37 +80,6 @@ function App() {
         setLoading(true);
         setError(null);
 
-        const tenureResponse = await fetch(
-          `${PRESIDENT_ENDPOINT}/${SELECTED_PRESIDENT_ID}`,
-          {
-            method: "GET",
-            signal: controller.signal,
-          }
-        );
-
-        if (!tenureResponse.ok) {
-          throw new Error(
-            `President tenure API error: ${tenureResponse.status} ${tenureResponse.statusText}`
-          );
-        }
-
-        const tenure = await tenureResponse.json();
-        const presidencyRecord = tenure?.[0];
-
-        if (!presidencyRecord?.startTime || !presidencyRecord?.endTime) {
-          throw new Error("Missing start/end time for president tenure");
-        }
-
-        const requestDates = getSampledDates(
-          presidencyRecord.startTime,
-          presidencyRecord.endTime,
-          10
-        );
-
-        if (requestDates.length === 0) {
-          throw new Error("No valid dates generated for Sankey request");
-        }
-
         const sankeyUrl = `${BASE_URL}/${SELECTED_PRESIDENT_ID}`;
 
         const response = await fetch(sankeyUrl, {
@@ -147,7 +87,7 @@ function App() {
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify(requestDates),
+          body: JSON.stringify(REQUEST_DATES),
           signal: controller.signal,
         });
 
